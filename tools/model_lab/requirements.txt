@@ -1,0 +1,4 @@
+# Model lab page (on top of edge/requirements.txt). Install the CUDA build of PyTorch first for GPU inference.
+gradio>=6.0
+imageio-ffmpeg        # bundled ffmpeg: decodes almost any video format, writes browser-playable H.264
+pillow-heif           # HEIC / HEIF photos (iPhone)
