@@ -1,0 +1,99 @@
+# Vidur edge agent configuration. Relative paths are resolved from the repository root.
+# The reasoning behind the rates and budgets is in docs/edge-deployment.md.
+
+device:
+  id: edge-demo-01
+  vehicle_id: DEMO-BUS-01
+  compute: auto            # auto | cpu | cuda:0. The Pi 5 is always cpu; auto picks CUDA on a laptop GPU.
+
+models:
+  v1:                      # RoadSense YOLOv8m: potholes + visible zebra crossings
+    weights: ML_models/RoadSense_ML_Edge-master/models/roadsense_yolov8/weights/best.pt
+    imgsz: [480, 800]      # rectangular: a 16:9 frame 800 px wide needs 480 rows, not 800
+    conf: 0.40
+  v2:                      # IDD YOLOv8n + ByteTrack: road users, signs, lights, poles
+    weights: ML_models/sih-2026-traffic-analytics-main/models/idd_yolov8/weights/best.pt
+    imgsz: [384, 640]
+    tracker: bytetrack.yaml
+  v3:                      # Sign condition YOLOv8s: runs on V2's sign crops, not on full frames
+    weights: ML_models/traffic_sign/best.pt
+    imgsz: 320
+    conf: 0.25
+  s1:                      # IRI regressor (TFLite, dynamic-range quantised)
+    tflite: ML_models/IRI/iri_compliant/iri_background_model.tflite
+    calibration: ML_models/IRI/iri_compliant/mobile_calibration_lut.json
+  s2:                      # Road-shock classifier. Not in the repo yet: the jerk fallback is used while it is missing.
+    tflite: ML_models/IRI/ml_model/road_classification/road_vision_final_float32.tflite
+
+# Real-time lane: runs on every frame it can keep up with and never queues.
+realtime:
+  v2_fps: 4.0
+  v2_fps_slow: 2.0         # used while the bus is stopped or the CPU is hot
+  stopped_speed_mps: 1.0
+  ring_buffer_s: 5.0       # covers the S2 vote delay plus the 1.5 s look-back
+  ring_buffer_fps: 10.0
+  ring_buffer_max_width: 1280
+  cpu_affinity: []         # Linux only. Pi 5: [0, 1]. Empty = no pinning.
+  threads: 0               # NCNN threads for V2. Pi 5: 2. 0 = runtime default.
+
+# Deferred lane: V1 and V3 jobs, processed from a bounded priority queue.
+deferred:
+  max_jobs: 20
+  cpu_affinity: []         # Linux only. Pi 5: [2, 3], so V1 never stalls V2.
+  threads: 0               # NCNN threads for V1 and V3. Pi 5: 2.
+  pause_in_school_zone: true
+  v1_sweep_fps: 0.0        # continuous V1 scan. Off on a Pi 5 CPU; try 0.5-2 on a laptop GPU or an AI HAT+.
+
+# IMU shock triggers for V1.
+triggers:
+  method: auto             # auto (S2 if its model file exists, else jerk) | s2 | jerk
+  frame_offsets_s: [1.5, 1.0, 0.6]   # frames before the jolt: the pothole was visible ahead of the wheel
+  min_gap_s: 1.0
+  min_gap_m: 15.0
+  s2:
+    hop_samples: 10
+    vote_window: 15
+    min_confidence: 0.82
+  jerk:                    # fallback thresholds; tune them on your own recorded rides
+    p2p_trigger: 9.0       # m/s2, peak-to-peak vertical acceleration in a 1.28 s window
+    p2p_big: 14.0
+    crest_min: 4.0
+
+iri:
+  window_m: 100.0
+  min_speed_mps: 1.0
+  az_gravity_offset: 0.0   # training az included gravity (-9.81); the team's phone logs are gravity-removed
+
+signs:
+  crops_per_track: 3
+  crop_margin: 0.3
+  track_timeout_s: 2.0
+  min_box_px: 16
+
+traffic:
+  window_s: 10.0
+  window_m: 100.0
+
+school_zones:
+  geojson: null            # school polygons or points, e.g. an OSM amenity=school export
+  point_buffer_m: 120.0
+  hours: [["07:30", "09:30"], ["13:30", "15:30"]]
+  days: [1, 2, 3, 4, 5, 6] # ISO weekdays, Monday to Saturday
+  alert_cooldown_s: 300
+  crossing_roi: [0.15, 0.55, 0.85, 0.85]   # x1, y1, x2, y2 as fractions of the frame
+
+potholes:
+  severity_area_frac: [0.0087, 0.0217]     # the original 18,000 / 45,000 px2 thresholds on a 1920x1080 frame
+  dedupe_m: 15.0
+  zebra_dedupe_m: 30.0
+  crop_margin: 0.2
+
+thermal:
+  throttle_c: 80.0         # Pi 5 throttles at about 80-85 C; above this, V2 slows down and V1 pauses
+
+output:
+  dir: out
+  envelope_every_s: 5.0
+  health_every_s: 60.0
+  jpeg_max_bytes: 60000
+  raw_video_mbps: 4.0      # what one 1080p camera would upload as raw video, for the bandwidth comparison

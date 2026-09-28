@@ -1,4 +1,4 @@
-ultralytics==8.0.0
+ultralytics>=8.4
 opencv-python
 requests
 flask

@@ -11,7 +11,7 @@
 
 A number marked **(README)** comes only from a README or notebook text and couldn't be re-derived from the artefacts. **(est.)** marks an estimate.
 
-The companion document [dashboard-backend-design.md](dashboard-backend-design.md) defines the event schema, backend and demo dashboard that consume these models.
+The companion document [dashboard-backend-design.md](dashboard-backend-design.md) defines the event schema, backend and demo dashboard that consume these models. [edge-deployment.md](edge-deployment.md) covers how the models are quantised and combined to run on a Raspberry Pi 5; the implementation is in [edge/](../edge/).
 
 ---
 
@@ -32,9 +32,9 @@ Plain (non-ML) logic that ships with these models: V1's box-area severity, and V
 1. **S1: the TFLite input order is the reverse of its usage doc.** Index 0 is `context_stats [1,13]` and index 1 is `raw_imu [1,400,6]`. The doc's Kotlin and Swift samples bind by position, so they feed the wrong tensors. Bind inputs by name or by rank.
 2. **S2: the TFLite `vibration` tensor is channels-last `[1,128,2]`.** The doc and its Kotlin/Swift code write the two channels one after the other, as planar data, which gives wrong logits (verified against the ONNX model). The scaler constants in the doc are placeholders; the real ones are in §S2.
 3. **S2's classes are quartiles of window jerk energy, not the human road labels.** The notebook overwrote the original labels. Treat its output as a relative shock grade, not a pothole detector.
-4. **V1 doesn't run as committed.**
-   - `src/infer.py` imports `src.modules.severity`, but the file sits at `src/modules/src/modules/severity.py`.
-   - `requirements.txt` pins `ultralytics==8.0.0`, which can't load a checkpoint saved with 8.4.163.
+4. **V1 doesn't run as committed.** *(Fixed 28 Sep: `severity.py` moved to `src/modules/`; pin changed to `ultralytics>=8.4`.)*
+   - `src/infer.py` imports `src.modules.severity`, but the file sat at `src/modules/src/modules/severity.py`.
+   - `requirements.txt` pinned `ultralytics==8.0.0`, which can't load a checkpoint saved with 8.4.163.
 5. **V1's class `missing_zebra` actually fires on *visible* zebra crossings.** "Missing" has to be worked out in the backend.
 6. **V2's bottleneck and pedestrian logic assume a fixed CCTV camera.**
    - Its "stalled vehicle" test uses pixel speed, which on a moving bus is only relative to the bus.
@@ -42,7 +42,7 @@ Plain (non-ML) logic that ships with these models: V1's box-area severity, and V
 7. **No model has seen bus-height footage or bus dynamics.**
    - The vision models were trained on car dashcam, handheld and web images.
    - Both IMU models were trained only in the BeamNG simulator, on cars.
-8. **V1 (YOLOv8m at 800 px) won't run in real time on a Raspberry Pi CPU (est.).** Run it only on IMU-triggered frames, or distil it to a nano model (§8).
+8. **V1 (YOLOv8m at 800 px) won't run in real time on a Raspberry Pi CPU (est.).** Run it only on IMU-triggered frames (§8, as the edge agent does), or replace it with a nano model ([v1-successor-plan.md](v1-successor-plan.md)).
 
 ---
 
@@ -63,12 +63,12 @@ Plain (non-ML) logic that ships with these models: V1's box-area severity, and V
 | Waterlogging | — | ✗ |
 | Road roughness (IRI) | S1 | ✅ Simulator-trained. |
 
-**Mapping to [ml-model-plan.md](ml-model-plan.md):**
+**Gaps against the plan:**
 
-- V2 is an early M1: IDD only and YOLOv8n, with no zebra, speed-bump or animal classes.
-- V1 covers part of M2 (potholes, not cracks) and adds zebra crossings.
-- V3 does M3's job, but as a full-frame detector with two conditions instead of a crop classifier.
-- M4 (waterlogging, dividers, lane markings) has not been started.
+- V2 is trained on IDD only: no zebra-crossing, speed-bump or animal classes.
+- V1 detects potholes but not cracks. Cracks are part of the planned nano successor ([v1-successor-plan.md](v1-successor-plan.md)).
+- V3 is a full-frame detector with two conditions. The edge agent runs it on sign crops from V2 instead ([edge-deployment.md §2](edge-deployment.md)).
+- A scene classifier for waterlogging, dividers and lane markings has not been started.
 
 ---
 
@@ -149,8 +149,8 @@ The wrapper `predict(frame, current_lat, current_lon, vehicle_id)` returns **one
 | > 45,000 | 3 |
 
 ### Known issues
-1. **Import bug.** `severity.py` is nested at `src/modules/src/modules/`, so `from src.modules.severity import …` in `src/infer.py` raises `ModuleNotFoundError`, and so does `tests/test_all.py`. `road_detector.py`, which computes severity inline, works.
-2. **Version pin.** `requirements.txt` pins `ultralytics==8.0.0`. The checkpoint's pickle references `ultralytics.nn.modules.block/conv/head`, a package layout that 8.0.0 doesn't have. Install Ultralytics 8.4.x.
+1. **Import bug.** *(Fixed 28 Sep.)* `severity.py` was nested at `src/modules/src/modules/`, so `from src.modules.severity import …` in `src/infer.py` raised `ModuleNotFoundError`, and so did `tests/test_all.py`. `road_detector.py`, which computes severity inline, worked.
+2. **Version pin.** *(Fixed 28 Sep.)* `requirements.txt` pinned `ultralytics==8.0.0`. The checkpoint's pickle references `ultralytics.nn.modules.block/conv/head`, a package layout that 8.0.0 doesn't have. Install Ultralytics 8.4.x.
 3. **Severity depends on the camera's resolution.** 45,000 px² is 2.2% of a 1920×1080 frame but 14.6% of a 640×480 frame. Normalise by frame area (`area / (W·H)`) before thresholding, and send `bbox` and `frameSize` so the backend can re-derive severity.
 4. **`missing_zebra` is misnamed.** Both sources for class 1 are boxes around *visible* crossings. A detector can't box something that isn't there. Treat class 1 as `zebra_crossing_seen`; "missing" is an absence in the backend (see the companion doc).
 5. **Placeholder location, identity and time.** GPS defaults to a hard-coded (28.6142, 77.2110) and `vehicleId` to `BUS_DEMO_01`. The timestamp is taken when the event is formatted, not when the frame was captured.
@@ -455,6 +455,9 @@ iri     = np.interp(iri_raw, lut.x_raw, lut.y_calibrated)   # clamps to [1.2128,
 ## 7. S2 — Road-shock classifier (vertical-accelerometer window → 4 grades)
 
 ### Files (in `IRI/ml_model/road_classification/`)
+
+> **These files are not in this repository yet.** They were read for this spec from the team's working copy. Until they are added, the edge agent triggers V1 with a jerk threshold instead ([edge-deployment.md §2.4](edge-deployment.md)) and switches to S2 automatically once `road_vision_final_float32.tflite` is present.
+
 | File | Status |
 |---|---|
 | `road_vision_final_float16.tflite` (221 KB) / `_float32.tflite` (436 KB) | **Deploy these.** Converted from the ONNX file below. |
@@ -527,22 +530,22 @@ SCALE = [1.0,  6.405128570025835, 6.002955638863807e-06, 0.8918762876362021]
 
 ## 8. Running them together on the edge
 
-### Compute (Raspberry Pi 5, CPU, NCNN FP16; est., scaled from the Pi numbers in ml-model-plan.md; measure before relying on them)
+Implemented in [edge/](../edge/). The full analysis (quantisation, the two-lane design and the CPU budget) is in [edge-deployment.md](edge-deployment.md). As deployed on a Raspberry Pi 5 CPU (NCNN FP16; Pi figures are estimates until measured):
 
-| Model | FLOPs / pass | Estimated latency | Suggested rate |
-|---|---|---|---|
-| V2 YOLOv8n @640 | ~8.7 G | tens of ms | 3–5 FPS with tracking |
-| V3 YOLOv8s @640 | ~29 G | ~0.2–0.3 s | only when V2 sees a sign, ≤ 2 FPS |
-| V1 YOLOv8m @800 | ~120 G | ~1 s or more | **only on IMU-triggered frames** from a ~3 s ring buffer, plus ≤ 0.5 FPS sweep. Or distil to YOLOv8n/YOLO26n (ml-model-plan M2). |
-| S1 | 26 k params per 100 m | < 1 ms | every 100 m |
-| S2 | ~110 k params per window | ~1 ms | every 10 samples |
+| Model | Input | FLOPs / run | Est. Pi 5 time | Rate |
+|---|---|---|---|---|
+| V2 YOLOv8n + ByteTrack | 384×640 (rectangular) | ~5.2 G | 60–90 ms | 3–4 FPS, 2 when stopped |
+| V3 YOLOv8s | 320×320 crops of V2's sign boxes | ~7.2 G | 60–95 ms | 3 crops per tracked sign |
+| V1 YOLOv8m | 480×800 (rectangular) | ~74 G | 0.6–0.9 s | 3 buffered frames per IMU jolt; no continuous scan on the CPU |
+| S1 | 26 k params per 100 m | — | < 1 ms (1 ms measured on a laptop) | every 100 m |
+| S2 (or jerk trigger) | ~110 k params per window | — | ~1 ms | every 10 samples |
 
-- Export the YOLO models with `yolo export model=best.pt format=ncnn half=True imgsz=<train size>`.
-- Run the two TFLite files with `ai-edge-litert` / `tflite-runtime`.
-- If the Pi can't keep up for the demo, run the same edge agent on a laptop and say so on the slide.
+- Export with `python edge/scripts/export_models.py`: NCNN FP16 at the rectangular sizes above. A square `imgsz=800` export, as first suggested here, was measured 36% slower for V1 with the same detections.
+- The two TFLite files run with `ai-edge-litert` on Linux, or TensorFlow on Windows.
+- The demo runs the same edge agent on a laptop in replay mode, and says so ([decisions.md](decisions.md), D4).
 
 ### Suggested fusion
-- **Pothole (IMU trigger).** When S2 gives class 3 with p ≥ 0.82, or |jerk| crosses a threshold, run V1 on the frames from 2.0 to 0.3 s before the jolt.
+- **Pothole (IMU trigger).** When S2 gives class 3 with p ≥ 0.82, or |jerk| crosses a threshold, run V1 on three buffered frames from 1.5, 1.0 and 0.6 s before the jolt.
 - **Pothole status.** Camera + IMU within about 15 m → `probable`. Camera only, or IMU only → `candidate`.
 - **Road condition.** S1 gives the per-segment roughness layer; S2 marks point shocks on top of it.
 - **Signs.** V2 finds `traffic sign` → V3 on that frame → one event per track.
@@ -571,9 +574,11 @@ The event types and payload fields each model emits are defined in [dashboard-ba
 
 ## 10. Fix list, ordered by demo impact
 
-1. **S1/S2 integration code:** bind TFLite inputs by name; use the S2 interleaved layout, the real scaler constants and `rms` without epsilon; compute S1's spectral features instead of hard-coding them.
-2. **V2:** re-check the geofence on every frame with GPS; drop the pixel-speed "stall" logic in favour of the backend's GPS-based bottleneck score; stop counting riders as pedestrians near schools (or show them separately); tie school hours to the real clock, or label the demo clock.
-3. **V1:** move `severity.py` to `src/modules/`; pin `ultralytics>=8.4`; normalise severity by frame area; rename class 1 to `zebra_crossing` in the events; stamp events with capture time and real GPS.
+Items 1–3 are done in the edge agent ([edge/](../edge/), 28 Sep). The teammates' original wrappers in `ML_models/` keep their old behaviour, apart from V1's two packaging fixes.
+
+1. ✅ **S1/S2 integration code:** bind TFLite inputs by name; use the S2 interleaved layout, the real scaler constants and `rms` without epsilon; compute S1's spectral features instead of hard-coding them. Covered by tests in `edge/tests/`.
+2. ✅ **V2:** re-check the geofence on every frame with GPS; drop the pixel-speed "stall" logic in favour of the backend's GPS-based bottleneck score; stop counting riders as pedestrians near schools (or show them separately); tie school hours to the real clock, or label the demo clock.
+3. ✅ **V1:** move `severity.py` to `src/modules/`; pin `ultralytics>=8.4`; normalise severity by frame area; rename class 1 to `zebra_crossing` in the events; stamp events with capture time and real GPS.
 4. **All vision models:** record 500–1,000 frames from a bus-mounted camera and check precision and recall on them before quoting any accuracy in the pitch.
 5. **S2:** retrain on the original `master_label.txt` labels, or present it only as a shock trigger.
 6. **S1:** settle the gravity convention; run a reference drive over a known-good and a known-bad stretch to sanity-check absolute IRI on the bus.

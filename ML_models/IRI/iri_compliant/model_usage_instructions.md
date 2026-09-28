@@ -1,5 +1,7 @@
 # International Roughness Index (IRI) Estimation: Mobile App Developer Guide
 
+> **Known errors in this guide (checked against the model file on 28 Sep 2026).** Input 0 of the TFLite model is `context_stats [1,13]` and input 1 is `raw_imu [1,400,6]`, the reverse of what the samples below assume: bind inputs by name, not position. Compute spectral features 11–12 instead of hard-coding them, and use the full calibration table in `mobile_calibration_lut.json`. The verified contract is in [docs/ml-models-spec.md §6](../../../docs/ml-models-spec.md), and a tested Python implementation is in [edge/runners/s1_iri.py](../../../edge/runners/s1_iri.py).
+
 This document provides complete, production-grade instructions for integrating the AASHTO/ASTM-compliant continuous roughness estimation model (`iri_background_model.tflite`) into iOS, Android, Flutter, or React Native mobile applications.
 
 ---

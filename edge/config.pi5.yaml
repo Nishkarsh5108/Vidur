@@ -1,0 +1,24 @@
+# Overlay for a Raspberry Pi 5 (CPU only). Deep-merged over edge/config.yaml:
+#   python -m edge --config edge/config.pi5.yaml ...
+# First create the NCNN exports:  python edge/scripts/export_models.py
+
+device:
+  compute: cpu
+
+models:
+  v1:
+    weights: exports/v1_roadsense_480x800_ncnn_model
+  v2:
+    weights: exports/v2_idd_384x640_ncnn_model
+  v3:
+    weights: exports/v3_signs_320_ncnn_model
+
+# Two lanes on two cores each: V2 keeps its latency whatever V1 is doing.
+realtime:
+  v2_fps: 3.0              # start at 3; raise to 4 once the measured budget allows (docs/edge-deployment.md)
+  cpu_affinity: [0, 1]
+  threads: 2
+deferred:
+  cpu_affinity: [2, 3]
+  threads: 2
+  v1_sweep_fps: 0.0        # no continuous V1 on the CPU; triggers only

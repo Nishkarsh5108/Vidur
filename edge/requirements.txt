@@ -1,0 +1,18 @@
+# Edge agent. Python 3.10+.
+# NVIDIA GPU (laptop demo): install the CUDA build of PyTorch first, e.g.
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# otherwise pip installs the CPU build.
+ultralytics>=8.4
+lap>=0.5                                       # ByteTrack assignment
+numpy
+opencv-python
+pyyaml
+
+# TFLite runtime for S1 and S2. LiteRT has no Windows wheel, so Windows falls back to TensorFlow (CPU).
+ai-edge-litert; platform_system != "Windows"
+tensorflow; platform_system == "Windows"
+
+# Raspberry Pi 5: NCNN runtime for the exported models (edge/scripts/export_models.py).
+ncnn; platform_machine == "aarch64"
+
+pytest

@@ -65,12 +65,14 @@ A single Python process in `edge/`. It is the **same code in live mode and in re
 
 ### Rates and aggregation rules
 
+These are the rates the edge agent implements ([edge/](../edge/)). The reasoning is in [edge-deployment.md §2](edge-deployment.md).
+
 | Source | Runs | Emits |
 |---|---|---|
-| V2 + ByteTrack | 3–5 FPS | `traffic_sample` every **10 s or 100 m**: mean and max counts per class, unique track IDs, bus speed |
-| V3 | on frames where V2 sees `traffic sign`, ≤ 2 FPS | `sign_condition` **once per track**, when it ends: best frame (largest box × sharpness), vote counts, JPEG crop |
-| S2 | every 10 IMU samples | `road_shock` when the smoothed class is ≥ 2; at most one per 15 m |
-| V1 | on the ring-buffer frames 2.0–0.3 s before each shock, plus a ≤ 0.5 FPS sweep | `pothole` (best box per shock or per 15 m) and `zebra_crossing` (once per 30 m), each with a crop |
+| V2 + ByteTrack | 3–4 FPS; 2 FPS while stopped or hot | `traffic_sample` every **10 s or 100 m**: mean and max counts per class, unique track IDs, bus speed |
+| V3 | once per V2 `traffic sign` track, when it ends, on its best 3 crops (box area × sharpness) at 320 px | `sign_condition` **once per track**: majority condition, vote counts, JPEG crop |
+| S2 (or a jerk threshold while S2's file is missing) | every 10 IMU samples | `road_shock` when the smoothed class is ≥ 2; at most one per 15 m |
+| V1 | on 3 ring-buffer frames, 1.5, 1.0 and 0.6 s before each jolt. No continuous scan on a Pi 5 CPU (optional with a GPU or AI HAT+). | `pothole` (best box per jolt, located where the wheel hit it) and `zebra_crossing` (once per 30 m), each with a crop |
 | S1 | every 100 m of travel (stride 100 m) | `iri_window` with start and end coordinates |
 | Geofence + V2 persons | every frame, only inside a school polygon | `pedestrian_zone_alert` at most once per school per 5 min, **with no image** |
 | GPS | 1 Hz | `telemetry` points, sent in batches |
@@ -387,27 +389,32 @@ All rules are idempotent and run every 10 s over events not yet processed.
 ## 7. Repository layout
 
 ```
-fleetsense/
+Vidur/
 ├── ML_models/                 # as delivered (read-only for the app)
-├── edge/
-│   ├── capture/ (live.py, replay.py)
-│   ├── runners/ (v1_roadsense.py, v2_idd.py, v3_signs.py, s1_iri.py, s2_shock.py)
+├── edge/                      # built (28 Sep)
+│   ├── capture/ (replay.py, ring_buffer.py)                 # live.py (picamera2, I²C IMU, gpsd) to follow
+│   ├── runners/ (v1_roadsense.py, v2_idd.py, v3_signs.py, s1_iri.py, s2_shock.py, yolo.py, tflite.py)
 │   ├── aggregators/ (traffic.py, signs.py, potholes.py, school_zone.py)
-│   ├── outbox.py  uploader.py  health.py  config.yaml
-│   └── tests/ (golden-input tests per runner: S1/S2 outputs must match the notebooks)
-├── backend/
+│   ├── agent.py  deferred.py  governor.py  imu.py  outbox.py  health.py  hud.py
+│   ├── config.yaml  config.pi5.yaml  scripts/ (export_models.py, benchmark.py)
+│   └── tests/ (model input contracts, queue policies, aggregators, end-to-end replay)
+├── backend/                   # to build
 │   ├── app/ (main.py, api/, schemas/ (pydantic, mirrors §3), db/, workers/, ws.py)
 │   ├── alembic/   scripts/load_osm.py   tests/
-├── dashboard/  (Vite React TS: pages/, layers/, api/, ws/)
-├── infra/docker-compose.yml   Makefile
+├── dashboard/  (Vite React TS: pages/, layers/, api/, ws/)       # to build
+├── infra/docker-compose.yml   Makefile                           # to build
 └── docs/
 ```
+
+The edge agent writes each upload batch as one line of `envelopes.jsonl`, in exactly the §3 envelope format. An `uploader.py` that POSTs those lines with retries is the remaining edge piece, and it is only needed once the backend exists.
 
 Write `backend/app/schemas` (pydantic) first and generate the TypeScript types from FastAPI's OpenAPI (`openapi-typescript`), so the edge, backend and dashboard can't drift apart.
 
 ---
 
 ## 8. Build plan
+
+*Status 28 Sep: most of the edge column through November week 1–2 is already built: replay capture, all five runners with tests, the IMU-triggered V1, the V3 cascade with per-track votes, the traffic summariser, the school geofence and the NCNN exports. Still open on the edge: live capture, the uploader and the recorded rides. The backend and dashboard have not been started.*
 
 | When | Edge | Backend | Dashboard |
 |---|---|---|---|
@@ -437,5 +444,5 @@ Write `backend/app/schemas` (pydantic) first and generate the TypeScript types f
 | GPS noise near flyovers and in urban canyons | Send `hdop` / `accuracyM`; widen cluster radii when accuracy is poor; ignore points with accuracy > 25 m for issue creation |
 | Privacy (faces, plates, children) | Blur on the edge; no pedestrian images; keep raw events 90 days and issues indefinitely |
 | Map-matching complexity | Deliberately skipped: draw on the GPS trace and group with H3. Map-matching (OSRM/Valhalla) goes on the roadmap slide. |
-| AGPL-3.0 (Ultralytics) | Fine for an open hackathon repo. A BEL product would need an enterprise licence or Apache-2.0 detectors (see ml-model-plan §12). |
+| AGPL-3.0 (Ultralytics) | Fine for an open hackathon repo. A BEL product would need an Ultralytics enterprise licence or detectors under a permissive licence such as Apache-2.0. |
 | Scale question from judges | Around 1,000 buses × about 1 event every 10 s is about 100 inserts/s: easy for one Postgres. Partition `telemetry` and `events` by day. Workers scale horizontally by H3 region. |

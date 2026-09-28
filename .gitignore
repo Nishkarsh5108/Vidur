@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Environments and secrets
+.venv/
+venv/
+env/
+.env
+kaggle.json
+
+# Editors and OS
+.vscode/
+.idea/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Training and export outputs
+runs/
+wandb/
+*.log
+*.cache
+exports/
+*_ncnn_model/
+
+# Model weights: only the three frozen demo checkpoints are versioned.
+# Base weights that Ultralytics downloads (yolov8n.pt, ...) and training epochs stay local.
+*.pt
+!ML_models/RoadSense_ML_Edge-master/models/roadsense_yolov8/weights/best.pt
+!ML_models/sih-2026-traffic-analytics-main/models/idd_yolov8/weights/best.pt
+!ML_models/traffic_sign/best.pt
+
+# Datasets and ride recordings (too large for git; keep them in recordings/)
+datasets/
+recordings/
+*.zip
+*.tar
+*.tar.gz
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Edge agent run output
+out/
+
+# Superseded or scratch files, kept locally only
+docs/ml-model-plan.md
+ML_models/IRI/iri_compliant/prev/
+ML_models/IRI/iri_compliant/model copy.ipynb
