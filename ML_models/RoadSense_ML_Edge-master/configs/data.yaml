@@ -1,0 +1,14 @@
+# RoadSense Dataset Configuration
+# Fused: RDD2022-India + CrosswalkCDNet + Kaggle Potholes
+
+path: ../Master_Dataset  # dataset root dir (relative to execution)
+train: images/train      # train images
+val: images/valid        # validation images
+
+# Number of classes
+nc: 2
+
+# Class names
+names:
+  0: pothole
+  1: missing_zebra

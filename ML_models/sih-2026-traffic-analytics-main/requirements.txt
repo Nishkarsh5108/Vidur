@@ -1,0 +1,14 @@
+# Core Computer Vision & Deep Learning
+ultralytics>=8.1.0
+supervision>=0.19.0
+opencv-python>=4.8.0.76
+
+# Geospatial & Networking
+shapely>=2.0.0
+requests>=2.31.0
+
+# Scientific Computing & Utilities
+numpy>=1.23.0
+pyyaml>=6.0
+tqdm>=4.65.0
+matplotlib>=3.7.0

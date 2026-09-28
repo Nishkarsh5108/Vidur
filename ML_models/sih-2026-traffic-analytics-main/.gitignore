@@ -1,0 +1,41 @@
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Large Datasets (Raw and Processed Images)
+data/raw/
+data/processed/
+*.tar.gz
+*.zip
+*.tar
+
+# Ultralytics Runs & Heavy Training Checkpoints
+runs/
+*.cache
+yolov8n.pt
+models/idd_yolov8/weights/epoch*.pt
+!models/idd_yolov8/weights/best.pt
+!models/idd_yolov8/weights/last.pt
+*.pt.tmp
+weights/
+
+# Video Media Files
+*.mp4
+*.avi
+*.mov
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini

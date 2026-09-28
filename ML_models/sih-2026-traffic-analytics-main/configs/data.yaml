@@ -1,0 +1,26 @@
+# IDD (India Driving Dataset) Detection 13-Class Configuration for YOLOv8
+path: e:/SIH_2026/data/processed
+train: images/train
+val: images/val
+
+# Class definitions (13 classes)
+names:
+  0: person
+  1: rider
+  2: car
+  3: bus
+  4: truck
+  5: autorickshaw
+  6: motorcycle
+  7: bicycle
+  8: traffic light
+  9: traffic sign
+  10: vehicle fallback
+  11: ego vehicle
+  12: pole
+
+# Class groupings for downstream modules
+vehicle_classes: [2, 3, 4, 5, 6, 7]        # car, bus, truck, autorickshaw, motorcycle, bicycle
+vulnerable_classes: [0, 1]                # person, rider
+infrastructure_classes: [8, 9, 12]        # traffic light, traffic sign, pole
+other_classes: [10, 11]                   # vehicle fallback, ego vehicle

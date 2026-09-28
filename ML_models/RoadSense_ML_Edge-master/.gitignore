@@ -1,0 +1,36 @@
+# Python
+__
+cat > .gitignore << 'EOF'
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ML training outputs
+runs/
+wandb/
+*.log
+
+# Datasets
+datasets/
+dataset/
+data/
+*.zip
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+
+# Kaggle
+kaggle.json
+
+# OS
+.DS_Store
+Thumbs.db
