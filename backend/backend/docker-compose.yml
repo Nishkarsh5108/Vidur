@@ -1,0 +1,13 @@
+# MongoDB only. The FastAPI app runs directly with uvicorn (easier to debug during the hackathon).
+services:
+  mongo:
+    image: mongo:7
+    container_name: fleet_sense_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

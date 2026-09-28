@@ -1,0 +1,7 @@
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+pymongo>=4.8,<5.0
+pydantic>=2.7,<3.0
+pydantic-settings>=2.3
+httpx>=0.27          # used by send_test_events.py and FastAPI's TestClient
+pytest>=8.0
