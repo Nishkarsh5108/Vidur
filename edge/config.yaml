@@ -43,6 +43,7 @@ deferred:
   threads: 0               # NCNN threads for V1 and V3. Pi 5: 2.
   pause_in_school_zone: true
   v1_sweep_fps: 0.0        # continuous V1 scan. Off on a Pi 5 CPU; try 0.5-2 on a laptop GPU or an AI HAT+.
+  v1_sweep_fps_no_imu: 0.0 # scan rate when there is no IMU to trigger V1 (camera-only evidence)
 
 # IMU shock triggers for V1.
 triggers:

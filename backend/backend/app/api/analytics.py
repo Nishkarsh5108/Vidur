@@ -43,6 +43,21 @@ def traffic(hours: int = Query(default=24, ge=1, le=24 * 30)):
     return analytics_service.traffic(get_db(), hours)
 
 
+@router.get("/traffic/bottlenecks")
+def traffic_bottlenecks(hours: int = Query(default=24, ge=1, le=24 * 30), limit: int = Query(default=20, ge=1, le=200)):
+    return analytics_service.traffic_bottlenecks(get_db(), hours, limit)
+
+
+@router.get("/infrastructure/missing-signs")
+def missing_signs(limit: int = Query(default=50, ge=1, le=500)):
+    return analytics_service.possibly_missing_signs(get_db(), limit)
+
+
+@router.get("/map/school-zones")
+def map_school_zones():
+    return analytics_service.school_zones()
+
+
 def _bbox(bbox: str | None) -> dict:
     try:
         return analytics_service.bbox_filter(bbox)

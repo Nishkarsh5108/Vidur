@@ -145,7 +145,10 @@ def load_school_zones(path: str | Path, point_buffer_m: float = 120.0) -> list[S
     """
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
-    features = data["features"] if data.get("type") == "FeatureCollection" else [data]
+    return zones_from_features(data["features"] if data.get("type") == "FeatureCollection" else [data], point_buffer_m)
+
+
+def zones_from_features(features: list[dict], point_buffer_m: float = 120.0) -> list[SchoolZone]:
     zones = []
     for n, feature in enumerate(features):
         props = feature.get("properties") or {}

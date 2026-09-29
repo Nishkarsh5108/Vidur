@@ -1,0 +1,32 @@
+# Demo fleet: each "bus" is a video paired with a stretch of a real GPS trace from the team's own drives
+# in Delhi NCR. The road geometry, speeds and school locations are real; the pairing with the videos is
+# simulated (the videos were not recorded on these roads). Build with tools/sim/build_scenario.py.
+
+traces_dir: D:/Coding/Hackathon/GFG/ARM/ARM/ml_model_work/data/raw/binary_mannual_collection
+out_dir: recordings/fleet
+
+buses:
+  - vehicle: BUS_IRI_01
+    video: recordings/hopper_east_coast_usa_trip_1_2800-9100_dashcam.mp4
+    imu: recordings/hopper_east_coast_usa_trip_1_2800-9100_imu_speed_data.csv
+    trace: sector_59.csv
+    note: BeamNG clip with its synced IMU (road roughness + jolt-triggered pothole checks); moves at the IMU's speed
+
+  - vehicle: BUS_ROAD_02
+    video: recordings/sample_video.mp4
+    trace: small temple trip.csv
+    target_kmh: 15
+    note: broken rural road, camera only (V1 scans continuously)
+
+  - vehicle: BUS_TRAFFIC_03
+    video: recordings/sample_video_trrafic.mp4
+    trace: irl.csv
+    pass_school: true
+    min_speed_mps: 0.5
+    note: urban traffic in North Delhi, driving through a real school zone (pedestrian alerts)
+
+  - vehicle: BUS_SIGNS_04
+    video: recordings/demox.avi
+    trace: Yashobhoomi.csv
+    target_kmh: 35
+    note: arterial road in Gurugram (sign condition)

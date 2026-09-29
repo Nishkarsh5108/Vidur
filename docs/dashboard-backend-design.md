@@ -2,6 +2,8 @@
 
 *28 Sep 2026. Consumes the models in [ml-models-spec.md](ml-models-spec.md). Goal: an end-to-end demo for the SIH finale that runs offline on one laptop, with anything not yet real clearly labelled as roadmap.*
 
+> **As-built note (29 Sep 2026).** The backend that got built ([backend/backend/](../backend/backend/README.md)) uses **FastAPI + MongoDB**, not the PostgreSQL/PostGIS stack this document specifies below — MongoDB's `2dsphere` index covers the same distance and point-in-polygon queries the design calls for. Its event contract is also simpler than §3 below (flat `metadata`, different field/type names) — see [docs/hello.md](hello.md) for the contract actually implemented, and [edge/backend.py](../edge/backend.py) for the edge-side translation. The rest of this document — the aggregation rules, the dashboard pages, the demo plan — still describes the intended design; check the backend's own README for what differs in practice.
+
 ---
 
 ## 0. Summary

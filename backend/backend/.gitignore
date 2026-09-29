@@ -36,3 +36,6 @@ temp/
 # MongoDB local data, if any
 data/
 mongodb/
+
+# Uploaded media crops (POST /api/v1/media)
+media_store/

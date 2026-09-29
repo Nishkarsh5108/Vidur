@@ -30,6 +30,7 @@ class TrafficAggregator:
         self.maxes: Counter[str] = Counter()
         self.tracks: set[int] = set()
         self.speeds: list[float] = []
+        self.confs: list[float] = []
 
     def add(self, t: float, boxes: list[Box], odometer: float, speed: float | None) -> dict[str, Any] | None:
         """Adds one frame's detections (speed None: no GPS). Returns a finished sample when the window closes."""
@@ -41,6 +42,7 @@ class TrafficAggregator:
         for name, n in counts.items():
             self.maxes[name] = max(self.maxes[name], n)
         self.tracks.update(b.track_id for b in boxes if b.name in COUNTED_CLASSES and b.track_id is not None)
+        self.confs.extend(b.conf for b in boxes if b.name in COUNTED_CLASSES)
         if speed is not None:
             self.speeds.append(speed)
         if t - self.t0 >= self.window_s or odometer - self.odo0 >= self.window_m:
@@ -52,6 +54,7 @@ class TrafficAggregator:
             return None
         sample = {
             "t_mid": (self.t0 + t) / 2,
+            "confidence": round(sum(self.confs) / len(self.confs), 3) if self.confs else None,
             "metadata": {
                 "windowS": round(t - self.t0, 2),
                 "distanceM": round(odometer - self.odo0, 1),

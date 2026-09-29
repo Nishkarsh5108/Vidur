@@ -16,9 +16,23 @@ class ImuSample:
     wx: float   # pitch rate, rad/s
     wy: float   # roll rate
     wz: float   # yaw rate
-    lat: float
+    lat: float     # NaN when the log has no position (GPS then comes from its own stream)
     lon: float
     speed: float   # m/s
+
+    @property
+    def has_position(self) -> bool:
+        return self.lat == self.lat and self.lon == self.lon     # False for NaN
+
+
+@dataclass
+class GpsFix:
+    """A GPS position, e.g. from the bus's AIS-140 unit or a per-frame GPS trail."""
+    t: float
+    lat: float
+    lon: float
+    speed: float           # m/s
+    heading: float | None = None
 
 
 @dataclass

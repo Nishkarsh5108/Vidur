@@ -55,13 +55,15 @@ class MediaStore:
 class Outbox:
     """Batches telemetry points and events into ingest envelopes every `every_s` seconds of capture time."""
 
-    def __init__(self, directory: Path, device_id: str, vehicle_id: str, every_s: float = 5.0):
+    def __init__(self, directory: Path, device_id: str, vehicle_id: str, every_s: float = 5.0,
+                 trip_id: str | None = None):
         directory.mkdir(parents=True, exist_ok=True)
         self.path = directory / "envelopes.jsonl"
         self.path.write_text("", encoding="utf-8")
         self.device_id, self.vehicle_id = device_id, vehicle_id
         self.every_s = every_s
-        self.trip_id: str | None = None
+        self.trip_id: str | None = trip_id
+        self.listeners: list = []          # called with each flushed batch of events, e.g. BackendUploader.submit
         self.events: list[dict[str, Any]] = []
         self.telemetry: list[dict[str, Any]] = []
         self.counts: Counter[str] = Counter()
@@ -105,4 +107,7 @@ class Outbox:
             fh.write(line)
         self.bytes_written += len(line.encode("utf-8"))
         self.envelopes += 1
+        if self.events:
+            for listener in self.listeners:
+                listener(self.events)
         self.events, self.telemetry = [], []

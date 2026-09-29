@@ -31,7 +31,7 @@ from edge.aggregators.potholes import RouteDeduper, best_of, pothole_metadata
 from edge.aggregators.school_zone import SchoolZoneMonitor
 from edge.aggregators.signs import SignTracker, sign_metadata, vote
 from edge.aggregators.traffic import TrafficAggregator
-from edge.capture import Frame, ImuSample
+from edge.capture import Frame, GpsFix, ImuSample
 from edge.capture.replay import ReplaySource
 from edge.capture.ring_buffer import FrameRingBuffer
 from edge.config import Section, repo_path
@@ -57,14 +57,16 @@ _TICKER_TYPES = {"pothole", "zebra_crossing", "sign_condition", "road_shock", "p
 
 class EdgeAgent:
     def __init__(self, cfg: Section, *, use_video: bool, use_imu: bool, realtime: bool, out_dir: Path,
+                 use_gps: bool = False, trip_id: str | None = None,
                  hud_path: Path | None = None, hud_fps: float = 30.0, show: bool = False):
         self.cfg = cfg
         self.realtime = realtime
         self.out_dir = out_dir
+        self.use_gps = use_gps            # positions come from a GPS stream, not from the IMU log
         self.health = Health()
         self.gps = GpsTrack()
         self.events = EventFactory(self.gps)
-        self.outbox = Outbox(out_dir, cfg.device.id, cfg.device.vehicle_id, cfg.output.envelope_every_s)
+        self.outbox = Outbox(out_dir, cfg.device.id, cfg.device.vehicle_id, cfg.output.envelope_every_s, trip_id)
         self.media = MediaStore(out_dir / "media", cfg.output.jpeg_max_bytes)
         self.ticker: deque[str] = deque(maxlen=5)
         self.devices: dict[str, str] = {}
@@ -137,6 +139,8 @@ class EdgeAgent:
             for kind, item in source:
                 if kind == "imu":
                     self._on_imu(item)
+                elif kind == "gps":
+                    self._on_gps(item)
                 else:
                     self._on_frame(item)
                 self._collect()
@@ -148,12 +152,20 @@ class EdgeAgent:
             log.warning("interrupted: finishing queued work and writing the summary")
         return self._finish(source, last_t)
 
+    def _on_gps(self, fix: GpsFix) -> None:
+        self.outbox.start_trip(fix.t)
+        self._update_position(fix.t, fix.lat, fix.lon, fix.speed)
+
+    def _update_position(self, t: float, lat: float, lon: float, speed: float) -> None:
+        self.gps.update(t, lat, lon, speed)
+        if self._last_telemetry_t is None or t - self._last_telemetry_t >= 1.0:
+            self._last_telemetry_t = t
+            self.outbox.add_telemetry(t, lat, lon, speed, self.gps.heading)
+
     def _on_imu(self, s: ImuSample) -> None:
         self.outbox.start_trip(s.t)
-        self.gps.update(s.t, s.lat, s.lon, s.speed)
-        if self._last_telemetry_t is None or s.t - self._last_telemetry_t >= 1.0:
-            self._last_telemetry_t = s.t
-            self.outbox.add_telemetry(s.t, s.lat, s.lon, s.speed, self.gps.heading)
+        if not self.use_gps and s.has_position:
+            self._update_position(s.t, s.lat, s.lon, s.speed)
         if self.iri is not None:
             window = self.iri.add(s)
             if window is not None:
@@ -193,7 +205,8 @@ class EdgeAgent:
         for track in self.signs.pop_ended(f.t):
             self._enqueue(Job("v3_sign", PRIORITY_V3_SIGN, track.last_t, {"track": track}))
 
-        sweep_fps = self.cfg.deferred.v1_sweep_fps
+        # Without an IMU nothing can trigger V1, so a camera-only bus scans instead (camera-only evidence).
+        sweep_fps = self.cfg.deferred.v1_sweep_fps if self.shocks is not None else self.cfg.deferred.v1_sweep_fps_no_imu
         moving = speed is None or speed >= self.cfg.realtime.stopped_speed_mps
         if sweep_fps > 0 and f.t >= self._next_sweep_t and moving:
             self._next_sweep_t = f.t + 1.0 / sweep_fps
@@ -309,6 +322,11 @@ class EdgeAgent:
                                        v3_signs.MODEL_VERSION, sign_metadata(track, condition, votes), media))
 
     def _emit_iri(self, w: IriWindow) -> None:
+        if w.start[0] != w.start[0]:          # the IMU log has no position: take the window's ends from GPS
+            a, b = self.gps.at(w.t_start), self.gps.at(w.t_end)
+            if a is None or b is None:
+                return
+            w.start, w.end = (a.lat, a.lon), (b.lat, b.lon)
         self._last_iri = w
         metadata = {
             "start": {"lat": round(w.start[0], 7), "lon": round(w.start[1], 7)},
@@ -332,7 +350,7 @@ class EdgeAgent:
         self._publish(self.events.make("road_shock", shock.t, confidence, model, version, metadata, sensor="imu"))
 
     def _emit_traffic(self, sample: dict[str, Any]) -> None:
-        self._publish(self.events.make("traffic_sample", sample["t_mid"], None, v2_idd.MODEL_NAME,
+        self._publish(self.events.make("traffic_sample", sample["t_mid"], sample["confidence"], v2_idd.MODEL_NAME,
                                        v2_idd.MODEL_VERSION, sample["metadata"]))
 
     def _emit_health(self, t: float) -> None:

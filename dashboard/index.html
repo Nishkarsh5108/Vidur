@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>FleetSense — Ops Dashboard</title>
+<meta name="description" content="Live map, road health, traffic and safety intelligence from the FleetSense edge fleet.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23d99a2b'/%3E%3Ctext x='12' y='17' font-family='Arial' font-weight='700' font-size='14' text-anchor='middle' fill='%23201404'%3EV%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <header id="topbar">
+    <div class="brand"><span class="mark">V</span>FleetSense <span class="sub">Ops</span></div>
+    <span id="conn-pill" class="pill"><span class="dot"></span><span id="conn-label">connecting…</span></span>
+    <div class="topbar-spacer"></div>
+
+    <div style="position:relative;display:flex;gap:6px">
+      <button id="sim-btn" class="btn primary"></button>
+      <button id="sim-gear" class="btn icon ghost" title="Simulation settings" aria-label="Simulation settings"></button>
+      <div id="sim-popover" class="popover" style="right:0">
+        <h4>Simulation settings</h4>
+        <div class="field">
+          <label for="sim-rate">Playback speed</label>
+          <select id="sim-rate" name="rate">
+            <option value="1" selected>1× — real time</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+            <option value="0">As fast as possible</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="sim-clock">Start clock</label>
+          <input id="sim-clock" name="clock" type="text" value="now" placeholder="now, or 2026-09-29T08:20:00+05:30">
+        </div>
+        <div class="field">
+          <label for="sim-conc">Buses loading at once</label>
+          <input id="sim-conc" name="maxConcurrent" type="number" min="1" max="8" value="2">
+        </div>
+        <div class="field row">
+          <label for="sim-hud">Record annotated video</label>
+          <span class="switch"><input id="sim-hud" name="hud" type="checkbox"><span class="knob"></span></span>
+        </div>
+        <div class="rail-label" style="margin-top:2px">Process log</div>
+        <div class="log-box" id="sim-log"></div>
+      </div>
+    </div>
+
+    <button id="theme-btn" class="btn icon ghost" title="Toggle theme" aria-label="Toggle theme"></button>
+  </header>
+
+  <nav id="rail"></nav>
+
+  <div id="map-wrap">
+    <div id="map"></div>
+    <div class="scenario-note">
+      <b>Demo data.</b> Real GPS traces &amp; real OpenStreetMap school zones stand in for buses that
+      haven't driven these videos' actual routes yet — the road and school locations are real, the
+      video-to-road pairing is simulated.
+    </div>
+    <div class="map-legend" id="map-legend"></div>
+  </div>
+
+  <aside id="panel">
+    <div class="panel-head">
+      <h2 id="panel-title">Live feed</h2>
+      <span class="hint" id="panel-hint"></span>
+    </div>
+    <div class="panel-body" id="panel-body"></div>
+  </aside>
+
+  <footer id="ticker">
+    <div class="seg"><span id="tick-events" class="num">0</span>&nbsp;events</div>
+    <span class="sep">·</span>
+    <div class="seg"><span id="tick-issues" class="num">0</span>&nbsp;open issues</div>
+    <span class="sep">·</span>
+    <div class="seg"><span id="tick-vehicles" class="num">0</span>&nbsp;active buses</div>
+    <span class="sep">·</span>
+    <div id="ticker-feed"><span class="line" id="ticker-line">Waiting for the fleet…</span></div>
+  </footer>
+</div>
+
+<div id="toasts"></div>
+
+<script src="vendor/maplibre-gl.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

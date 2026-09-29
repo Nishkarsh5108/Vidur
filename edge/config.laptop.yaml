@@ -1,0 +1,12 @@
+# Overlay for the laptop demo (GPU edge), deep-merged over edge/config.yaml:
+#   python -m edge --config edge/config.laptop.yaml ...
+# Used by tools/sim/run_fleet.py.
+
+device:
+  compute: auto            # CUDA when available
+
+deferred:
+  v1_sweep_fps_no_imu: 2.0 # cameras without an IMU scan for potholes twice a second (cheap on a GPU)
+
+traffic:
+  window_s: 5.0            # the backend asks for one traffic_density event about every 5 s (docs/hello.md)
