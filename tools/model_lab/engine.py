@@ -6,6 +6,7 @@ the bundled ffmpeg for formats OpenCV cannot open, and videos are written as H.2
 
 from __future__ import annotations
 
+import bisect
 import json
 import queue
 import subprocess
@@ -20,10 +21,27 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
 
 from edge.config import load_config, repo_path  # noqa: E402
 from edge.imaging import crop_with_margin  # noqa: E402
+from edge.capture.replay import ImuCsvReader  # noqa: E402
+from edge.imu import IriStream, IriWindow  # noqa: E402
+from edge.runners.s1_iri import IriModel  # noqa: E402
+
+# The traffic-bottleneck logic (zone dwell-time + density) lives in the traffic team's own repo, not
+# ours — reused as-is (per their instructions in docs/traffic_bottleneck.txt) rather than
+# reimplemented, so the thresholds and zone geometry match what they actually tuned it against.
+_TRAFFIC_SRC = REPO / "ML_models" / "sih-2026-traffic-analytics-main" / "src"
+try:
+    if str(_TRAFFIC_SRC) not in sys.path:
+        sys.path.insert(0, str(_TRAFFIC_SRC))
+    from modules.vehicle_density import VehicleDensityTracker, DEFAULT_VEHICLE_CLASS_NAMES  # noqa: E402
+    _VEHICLE_ID_BY_NAME = {name: cid for cid, name in DEFAULT_VEHICLE_CLASS_NAMES.items()}
+except ImportError:
+    VehicleDensityTracker = None
+    _VEHICLE_ID_BY_NAME = {}
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".jfif", ".png", ".bmp", ".dib", ".tif", ".tiff", ".webp", ".heic", ".heif",
               ".avif", ".jp2", ".pbm", ".pgm", ".ppm", ".pnm", ".ico", ".sr", ".ras", ".exr", ".hdr"}
@@ -72,7 +90,9 @@ class ModelLab:
         self.device = ("cuda:0" if torch.cuda.is_available() else "cpu") if device == "auto" else device
         self.gpu_name = torch.cuda.get_device_name(0) if self.device.startswith("cuda") else "CPU"
         cfg = load_config()
+        self.cfg = cfg
         self.models = {key: YOLO(str(repo_path(cfg.models[key.lower()].weights)), task="detect") for key in MODELS}
+        self.iri_model = IriModel(repo_path(cfg.models.s1.tflite), repo_path(cfg.models.s1.calibration))
         self.tracker = None
         warm = np.zeros((640, 640, 3), np.uint8)
         for model in self.models.values():
@@ -162,6 +182,39 @@ class ModelLab:
                                   None if tid is None else int(tid)))
         return dets
 
+    def iri_windows(self, imu_path: Path) -> list[IriWindow]:
+        """Every completed 100 m IRI window in an IMU CSV, video-synced (t=0 at the video's first frame).
+
+        Runs the whole log through S1 up front rather than per video frame: a window only needs
+        ~100 m of travel worth of samples, so even a long clip is a handful of cheap calls, and it
+        keeps the per-frame render loop free of any IMU-format handling.
+        """
+        reader = ImuCsvReader(imu_path, time_base=0.0)
+        stream = IriStream(self.iri_model, self.cfg.iri.window_m, self.cfg.iri.min_speed_mps,
+                            self.cfg.iri.az_gravity_offset)
+        windows = []
+        for sample in reader:
+            w = stream.add(sample)
+            if w is not None:
+                windows.append(w)
+        return windows
+
+    def bottleneck_tracker(self, width: int, height: int) -> "VehicleDensityTracker | None":
+        """A fresh per-video bottleneck tracker (dwell-time + zone density), or None if unavailable."""
+        if VehicleDensityTracker is None:
+            return None
+        tracker = VehicleDensityTracker(dwell_time_threshold=6.0, bottleneck_density_threshold=4)
+        tracker.set_default_roi(width, height)
+        return tracker
+
+    def bottleneck_frame(self, tracker: "VehicleDensityTracker", dets: list[Detection], t: float) -> dict:
+        """Feeds one analysed frame's V2 vehicle detections to the tracker and packages the result
+        for drawing: which zones are currently in alert, and which track IDs are the stalled culprits."""
+        parsed = [{"track_id": d.track_id, "bbox": d.xyxy, "class_id": _VEHICLE_ID_BY_NAME[d.name]}
+                  for d in dets if d.model == "V2" and d.track_id is not None and d.name in _VEHICLE_ID_BY_NAME]
+        result = tracker.update(parsed, current_time=t)
+        return {"zones": tracker.zones, "result": result, "stalled_ids": set(result.stalled_vehicle_ids)}
+
     # ---------------------------------------------------------------- images and videos
 
     def run_image(self, path: Path, opts: Options, out_dir: Path) -> dict:
@@ -179,7 +232,8 @@ class ModelLab:
                 "size": (image.shape[1], image.shape[0])}
 
     def run_video(self, path: Path, opts: Options, out_dir: Path,
-                  progress: Callable[[float, str], None] = lambda f, m: None, batch: int = 8) -> dict:
+                  progress: Callable[[float, str], None] = lambda f, m: None, batch: int = 8,
+                  imu_path: Path | None = None) -> dict:
         reader = VideoInput(path, out_dir)
         fps, total = reader.fps, reader.frame_count
         if opts.max_seconds > 0:
@@ -188,15 +242,27 @@ class ModelLab:
         stats: dict = defaultdict(list)
         records, per_frame = [], []
         last: list[Detection] = []
+        last_bneck: dict | None = None
         done, analysed = 0, 0
         start = time.perf_counter()
         pending: list[tuple[int, np.ndarray]] = []
+
+        # Bottleneck detection needs persistent track IDs across frames, so it only runs when V2 is
+        # tracked. The IRI overlay is entirely optional: no IMU file means no key in `extras` at all,
+        # so render() below never draws it — this is how "works without an IMU file too" is satisfied.
+        bottleneck = self.bottleneck_tracker(reader.width, reader.height) \
+            if "V2" in opts.models and opts.track else None
+        iri_windows, iri_ends = None, None
+        if imu_path is not None:
+            iri_windows = self.iri_windows(imu_path)
+            iri_ends = [w.t_end for w in iri_windows]
+
         # Decoding runs ahead and drawing + encoding run behind in their own threads, so the GPU is not
         # left waiting on CPU work between batches.
         encoder = EncoderThread(out_path, fps, opts.max_width)
 
         def flush():
-            nonlocal last, analysed
+            nonlocal last, analysed, last_bneck
             to_run = [(i, f) for i, f in pending if i % opts.stride == 0]
             results = dict(zip([i for i, _ in to_run],
                                self.infer([f for _, f in to_run], opts, stats, first=analysed == 0))) if to_run else {}
@@ -206,7 +272,18 @@ class ModelLab:
                     analysed += 1
                     per_frame.append(last)
                     records.extend({"frame": i, "t": round(i / fps, 3), **asdict(d)} for d in last)
-                encoder.put(frame, last)
+                    if bottleneck is not None:
+                        # +epsilon: VehicleDensityTracker checks `... and state.zone_entry_time`, and
+                        # 0.0 is falsy in Python, so a vehicle already parked in a zone at frame 0 (every
+                        # video's first analysed frame is t=0.0 exactly) would never accrue dwell time.
+                        last_bneck = self.bottleneck_frame(bottleneck, last, i / fps + 1e-3)
+                extras: dict = {}
+                if last_bneck is not None:
+                    extras["bneck"] = last_bneck
+                if iri_windows is not None:
+                    idx = bisect.bisect_right(iri_ends, i / fps) - 1
+                    extras["iri"] = iri_windows[idx] if idx >= 0 else None
+                encoder.put(frame, last, extras)
             pending.clear()
 
         try:
@@ -225,7 +302,8 @@ class ModelLab:
         json_path = write_json(out_dir / f"{path.stem}_detections.json", records)
         return {"kind": "video", "file": out_path, "json": json_path, "dets": per_frame, "stats": stats,
                 "elapsed": elapsed, "frames": done, "analysed": analysed, "fps": fps,
-                "size": (reader.width, reader.height)}
+                "size": (reader.width, reader.height), "bottleneck": bottleneck is not None,
+                "iri_windows": iri_windows}
 
 
 def new_bytetrack():
@@ -345,16 +423,16 @@ class EncoderThread:
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
-    def put(self, frame: np.ndarray, dets: list[Detection]) -> None:
+    def put(self, frame: np.ndarray, dets: list[Detection], extras: dict | None = None) -> None:
         if self.error is not None:
             raise self.error
-        self.q.put((frame, dets))
+        self.q.put((frame, dets, extras or {}))
 
     def _run(self) -> None:
         writer = None
         try:
             while (item := self.q.get()) is not None:
-                annotated = fit_width(draw(*item), self.max_width)
+                annotated = fit_width(render(*item), self.max_width)
                 if writer is None:
                     writer = H264Writer(self.path, annotated.shape[1], annotated.shape[0], self.fps)
                 writer.write(annotated)
@@ -401,22 +479,82 @@ def color_of(d: Detection) -> tuple[int, int, int]:
     return _COLORS.get((d.model, d.name), (0, 255, 255))
 
 
-def draw(image: np.ndarray, dets: list[Detection]) -> np.ndarray:
+def draw(image: np.ndarray, dets: list[Detection], stalled_ids: frozenset[int] = frozenset()) -> np.ndarray:
     out = image.copy()
     h, w = out.shape[:2]
     thick = max(2, round(min(h, w) / 360))
     scale = max(0.45, min(h, w) / 1100)
     order = {"V2": 0, "V3": 1, "V1": 2}                      # V1 on top: it is the rarest and most important
     for d in sorted(dets, key=lambda d: order[d.model]):
-        color = color_of(d)
+        stalled = d.model == "V2" and d.track_id in stalled_ids
+        color = (0, 0, 255) if stalled else color_of(d)
         x1, y1, x2, y2 = (int(v) for v in d.xyxy)
-        cv2.rectangle(out, (x1, y1), (x2, y2), color, thick + (1 if d.model != "V2" else 0))
+        cv2.rectangle(out, (x1, y1), (x2, y2), color, thick + (1 if d.model != "V2" or stalled else 0))
         label = f"{d.model} {d.name}{f' #{d.track_id}' if d.track_id is not None and d.model == 'V2' else ''} {d.conf:.2f}"
+        if stalled:
+            label += " STALLED"
         (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, scale, max(1, thick - 1))
         ty = y1 - 4 if y1 - th - 8 > 0 else y2 + th + 6
         cv2.rectangle(out, (x1, ty - th - 4), (x1 + tw + 6, ty + base), color, -1)
         text_color = (0, 0, 0) if sum(color) > 380 else (255, 255, 255)
         cv2.putText(out, label, (x1 + 3, ty - 2), cv2.FONT_HERSHEY_SIMPLEX, scale, text_color, max(1, thick - 1))
+    return out
+
+
+def draw_bottleneck_zones(out: np.ndarray, zones: dict, result) -> np.ndarray:
+    """Zone polygons + a density HUD, top-left — the overlay docs/traffic_bottleneck.txt describes."""
+    for name, poly in zones.items():
+        alert = result.zone_bottlenecks.get(name, False)
+        color = (0, 0, 230) if alert else (0, 190, 100)
+        cv2.polylines(out, [poly], isClosed=True, color=color, thickness=2, lineType=cv2.LINE_AA)
+        tag = f"{name}: {result.zone_counts.get(name, 0)} veh" + (" [BOTTLENECK]" if alert else "")
+        cv2.putText(out, tag, (int(poly[:, 0].min()), max(18, int(poly[:, 1].min()) - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
+    any_alert = any(result.zone_bottlenecks.values())
+    box_w, box_h = 300, 40
+    cv2.rectangle(out, (10, 10), (10 + box_w, 10 + box_h), (20, 20, 20), -1)
+    cv2.rectangle(out, (10, 10), (10 + box_w, 10 + box_h), (80, 80, 80), 1)
+    color = (0, 60, 255) if any_alert else (0, 230, 130)
+    text = f"BOTTLENECK: {sum(result.zone_bottlenecks.values())} zone(s)" if any_alert else "Traffic flow: normal"
+    cv2.putText(out, text, (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+    return out
+
+
+_IRI_COLORS = {"good": (0, 210, 120), "fair": (0, 210, 230), "poor": (0, 140, 255), "very_poor": (0, 0, 255)}
+
+
+def draw_iri_hud(out: np.ndarray, window) -> np.ndarray:
+    """Live IRI readout, top-right — updates once per completed 100 m window, held steady between."""
+    h, w = out.shape[:2]
+    box_w, box_h = 220, 60
+    x2, y1 = w - 14, 14
+    x1, y2 = x2 - box_w, y1 + box_h
+    cv2.rectangle(out, (x1, y1), (x2, y2), (20, 20, 20), -1)
+    cv2.rectangle(out, (x1, y1), (x2, y2), (80, 80, 80), 1)
+    if window is None:
+        cv2.putText(out, "IRI: gathering 100 m...", (x1 + 10, y1 + 34), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (200, 200, 200), 1, cv2.LINE_AA)
+        return out
+    color = _IRI_COLORS.get(window.iri_class, (255, 255, 255))
+    cv2.putText(out, f"IRI {window.iri:.1f} m/km", (x1 + 10, y1 + 32), cv2.FONT_HERSHEY_SIMPLEX,
+                0.6, color, 2, cv2.LINE_AA)
+    cv2.putText(out, window.iri_class.replace("_", " ").upper(), (x1 + 10, y1 + 52),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+    return out
+
+
+def render(frame: np.ndarray, dets: list[Detection], extras: dict) -> np.ndarray:
+    """Draws model boxes plus whichever optional overlays this frame's `extras` carries.
+
+    `extras` only has an "iri" key when an IMU file was supplied, so a plain run (no IMU) never
+    touches draw_iri_hud at all — that is how the overlay stays fully optional.
+    """
+    bneck = extras.get("bneck")
+    out = draw(frame, dets, bneck["stalled_ids"] if bneck else frozenset())
+    if bneck:
+        out = draw_bottleneck_zones(out, bneck["zones"], bneck["result"])
+    if "iri" in extras:
+        out = draw_iri_hud(out, extras["iri"])
     return out
 
 

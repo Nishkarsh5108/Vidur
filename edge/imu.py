@@ -205,7 +205,7 @@ class IriStream:
             return None
         data = np.array(rows, dtype=np.float64)
         with self.timed("S1"):
-            raw, ctx = window_tensors(data[:, 0], data[:, 2:8], data[:, 8], start_m, self.window_m)
+            raw, ctx = window_tensors(data[:, 0], data[:, 2:8], data[:, 8], data[:, 1], start_m, self.window_m)
             iri, iri_raw = self.model.predict(raw, ctx)
         return IriWindow(
             t_start=float(data[0, 1]), t_end=float(data[-1, 1]),

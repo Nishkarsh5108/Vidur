@@ -31,12 +31,15 @@ LEGEND = (
     "**V1** <span style='color:#e33'>■</span> pothole · <span style='color:#999'>□</span> zebra crossing &nbsp;&nbsp; "
     "**V2** <span style='color:#3c3'>■</span> vehicles · <span style='color:#f80'>■</span> person / rider · "
     "<span style='color:#0bf'>■</span> sign, light, pole &nbsp;&nbsp; "
-    "**V3** <span style='color:#f0f'>■</span> damaged sign · <span style='color:#1d8'>■</span> good sign"
+    "**V3** <span style='color:#f0f'>■</span> damaged sign · <span style='color:#1d8'>■</span> good sign\n\n"
+    "On video with V2 tracking on: stalled vehicles and bottleneck zones are outlined in red, top-left. "
+    "Add an IMU CSV to also show a live **S1 IRI** readout, top-right."
 )
 HEADERS = ["model", "class", "frames with it", "detections", "unique tracks", "mean conf", "max conf"]
 
 
-def run(file, models, conf_v1, conf_v2, conf_v3, v3_mode, track, stride, max_seconds, progress=gr.Progress()):
+def run(file, imu_file, models, conf_v1, conf_v2, conf_v3, v3_mode, track, stride, max_seconds,
+        progress=gr.Progress()):
     if not file:
         raise gr.Error("Upload an image or a video first.")
     if not models:
@@ -50,7 +53,8 @@ def run(file, models, conf_v1, conf_v2, conf_v3, v3_mode, track, stride, max_sec
     try:
         if is_video(path):
             progress(0, desc="decoding")
-            result = LAB.run_video(path, opts, out_dir, progress=lambda f, m: progress(f, desc=m))
+            result = LAB.run_video(path, opts, out_dir, progress=lambda f, m: progress(f, desc=m),
+                                    imu_path=Path(imu_file) if imu_file else None)
         else:
             result = LAB.run_image(path, opts, out_dir)
     except Exception as exc:          # show decode or inference problems in the page, not just the console
@@ -79,16 +83,23 @@ def report(path: Path, r: dict, opts: Options) -> str:
     timing = [f"{m} {np.mean(v):.1f} ms" for m, v in sorted(r["stats"].items()) if v]
     if timing:
         lines.append("Mean inference per image (per crop for V3 on signs): " + " · ".join(timing))
+    if r.get("bottleneck"):
+        lines.append("Traffic bottleneck zones (dwell-time + density) drawn top-left.")
+    windows = r.get("iri_windows")
+    if windows is not None:
+        lines.append(f"IRI overlay top-right, from {len(windows)} completed 100 m window(s)"
+                      if windows else "IRI overlay top-right (no 100 m window completed — clip or IMU log too short).")
     lines.append("<sub>Laptop GPU timings, not Raspberry Pi 5 measurements.</sub>")
     return "\n\n".join(lines)
 
 
 with gr.Blocks(title="Vidur model lab") as demo:
-    gr.Markdown(f"# Vidur model lab\nUpload an image or a video to run the vision models on every frame. "
-                f"Running on **{LAB.gpu_name}** ({LAB.device}).")
+    gr.Markdown("# Vidur model lab")
     with gr.Row():
         with gr.Column(scale=1, min_width=320):
             file = gr.File(label="Image or video (any format ffmpeg or Pillow can read)", type="filepath")
+            imu_file = gr.File(label="IMU CSV (optional, video-synced) — adds a live IRI readout, "
+                                      "top-right of the result video", type="filepath")
             models = gr.CheckboxGroup([(label, key) for key, label in MODELS.items()], value=list(MODELS),
                                       label="Models")
             with gr.Accordion("Settings", open=False):
@@ -109,7 +120,7 @@ with gr.Blocks(title="Vidur model lab") as demo:
             table = gr.Dataframe(headers=HEADERS, label="Detections", interactive=False, wrap=True)
             downloads = gr.File(label="Downloads: annotated file and detections JSON", file_count="multiple")
 
-    run_btn.click(run, [file, models, conf_v1, conf_v2, conf_v3, v3_mode, track, stride, max_seconds],
+    run_btn.click(run, [file, imu_file, models, conf_v1, conf_v2, conf_v3, v3_mode, track, stride, max_seconds],
                   [out_image, out_video, info, table, downloads])
 
 

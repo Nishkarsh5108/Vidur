@@ -49,16 +49,50 @@ def test_context_features_match_training():
 def test_window_resampling_and_speed_normalisation():
     n = 300
     dist = np.linspace(0, 100, n)
+    t = np.linspace(0, 100 / 11.11, n)          # constant 11.11 m/s over the window
     imu6 = np.ones((n, 6))
     speed = np.full(n, 11.11)                  # 40 km/h -> az scaled by (22.22 / 11.11)^2 = 4
-    raw, ctx = s1_iri.window_tensors(dist, imu6, speed, 0.0)
+    raw, ctx = s1_iri.window_tensors(dist, imu6, speed, t, 0.0)
     assert raw.shape == (400, 6) and raw.dtype == np.float32
     assert ctx.shape == (13,) and ctx.dtype == np.float32
     np.testing.assert_allclose(raw[:, 2], 4.0, rtol=1e-5)
     np.testing.assert_allclose(raw[:, [0, 1, 3, 4, 5]], 1.0)
     # Below 5 m/s the normalisation is capped: (22.22 / 5)^2.
-    raw_slow, _ = s1_iri.window_tensors(dist, imu6, np.full(n, 2.0), 0.0)
+    raw_slow, _ = s1_iri.window_tensors(dist, imu6, np.full(n, 2.0), t, 0.0)
     np.testing.assert_allclose(raw_slow[:, 2], (22.22 / 5.0) ** 2, rtol=1e-5)
+
+
+def test_window_tensors_reproduces_training_device_rate_hold():
+    """The model never trained on a smoothly-interpolated 100 Hz signal (see window_tensors'
+    docstring): every training window is first collapsed to a held/step signal at <=50 Hz, aliasing
+    any content above that rate. A raw signal oscillating faster than the hold rate must come out
+    measurably different from a naive single-stage interpolation straight from the 100 Hz samples
+    (the module's previous, now-wrong behaviour) -- not passed through unchanged."""
+    hz, duration_s, speed_mps = 100.0, 4.0, 20.0
+    n = int(hz * duration_s)
+    t = np.arange(n) / hz
+    dist = t * speed_mps                        # 0 to 80 m, constant speed
+    speed = np.full(n, speed_mps)
+    fast_hz = 30.0                               # above TRAIN_SIM_HZ's Nyquist rate (25 Hz)
+    az_fast = np.sin(2 * np.pi * fast_hz * t)
+    imu6 = np.zeros((n, 6))
+    imu6[:, 2] = az_fast
+
+    raw, _ = s1_iri.window_tensors(dist, imu6, speed, t, 0.0, window_m=80.0)
+    naive = np.interp(np.linspace(0, 80.0, s1_iri.GRID_POINTS), dist, az_fast)
+
+    # Speed normalisation at exactly the reference speed (22.22 m/s) is near 1x, so comparing
+    # raw[:, 2] to the un-normalised naive signal directly is still meaningful here.
+    assert not np.allclose(raw[:, 2], naive, atol=0.2), \
+        "held-then-resampled az should differ from a naive full-rate interpolation"
+
+
+def test_previous_hold_matches_scipy_semantics():
+    x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    q = np.array([0.0, 0.4, 0.99, 1.0, 1.5, 3.9, 4.0, 5.0])   # never below x[0], as window_tensors guarantees
+    np.testing.assert_array_equal(s1_iri._previous_hold(x, y, q),
+                                   [10.0, 10.0, 10.0, 20.0, 20.0, 40.0, 50.0, 50.0])
 
 
 def test_iri_class_bins():
@@ -78,7 +112,8 @@ def test_model_binds_inputs_by_name_and_output_is_calibrated():
 
     rng = np.random.default_rng(1)
     dist = np.linspace(0, 100, 350)
+    t = np.linspace(0, 100 / 15.0, 350)
     imu6 = rng.normal(0, 0.5, (350, 6))
-    raw, ctx = s1_iri.window_tensors(dist, imu6, np.full(350, 15.0), 0.0)
+    raw, ctx = s1_iri.window_tensors(dist, imu6, np.full(350, 15.0), t, 0.0)
     iri, iri_raw = model.predict(raw, ctx)
     assert 1.2128 <= iri <= 15.572 and iri_raw > 0
