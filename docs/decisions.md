@@ -150,3 +150,32 @@
 - **Bug caught in testing:** the first version of the missing-sign check used "any later nearby event," which flags almost every sign as missing, because the *same* bus keeps logging other events (traffic samples, IRI windows) a few seconds and metres further on while still driving past the sign it just saw. Requiring the nearby event's `tripId` to be one that never contributed to that issue fixes it — proven by `test_the_same_trip_driving_further_does_not_count_as_a_revisit` in `backend/backend/tests/test_analytics_extra.py`, and by the live 4-bus run correctly returning zero flagged signs (every bus in the demo drives its route once).
 
 **Detail:** `backend/backend/README.md §4a–§4b, §7`.
+
+### D13. Two bugs a screenshot caught that nothing else did (29 Sep 2026)
+
+**What happened.** Every automated check before this point passed — 73 tests, syntax checks, import/export
+cross-checks, live curl tests of every REST endpoint. The dashboard still opened to a map full of "API KEY
+REQUIRED" watermark tiles, and the connection pill read "Disconnected." A screenshot from the user (no
+headless browser was available in this environment — see D10's follow-up) is what actually caught both.
+
+**Bug 1: the basemap.** CARTO's `{s}.basemaps.cartocdn.com` raster tiles now require an API key for
+anonymous use. The request still returned `HTTP 200` — a small watermark PNG instead of a real tile —
+so nothing in a curl-based check ever flagged it; the failure mode looks identical to success at the
+HTTP level. Fixed by switching to [OpenFreeMap](https://openfreemap.org)'s free, unlimited, no-key
+vector styles (`positron` for light, `dark` for dark) — MapLibre's own recommended free option, and
+genuinely free rather than free-until-it-isn't.
+
+**Bug 2: the WebSocket.** `uvicorn` had been installed piecemeal earlier in this session
+(`pip install fastapi uvicorn pymongo ...`) rather than via `pip install -r requirements.txt`, which
+skipped the `[standard]` extra and left the `websockets` package missing. Without it, uvicorn has no
+WebSocket protocol implementation at all and silently 404s every WS upgrade request — but FastAPI's
+`TestClient` talks to the ASGI app in-process and never needed that package, so all 73 tests, including
+the WebSocket test, passed throughout. Confirmed with a real socket-level WS client (not TestClient) and
+fixed by installing `websockets` and restarting the server.
+
+**Why this is worth writing down.** Both bugs share a shape: a dependency degrades quietly (an API
+policy changes; a package is missing) and the *failure itself* still returns something that looks like
+success (`HTTP 200`; a passing test suite) to every check that doesn't render the actual page. `pip
+install -r requirements.txt` (not a piecemeal install) and an actual look at the running page remain
+the only checks that catch this class of bug — worth remembering for the next dependency, not just
+these two.

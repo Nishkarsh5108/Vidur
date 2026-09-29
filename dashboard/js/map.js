@@ -1,34 +1,18 @@
 // The map: one MapLibre instance, a handful of GeoJSON sources, and per-view layer visibility.
 //
-// Base tiles are CARTO's free Positron/Dark Matter raster basemaps (© OpenStreetMap contributors,
-// © CARTO — attribution is wired into the map's attribution control, not just this comment). Raster
-// XYZ tiles need no glyphs/sprite setup, unlike a full vector style, which keeps this file simple and
-// keeps MapLibre's vendored JS (dashboard/vendor/) the only network-free part of the map: the tiles
-// themselves are fetched live, exactly like the "free vector style ... for offline use" fallback the
-// original design doc (docs/dashboard-backend-design.md §5) already anticipated as a roadmap item.
-
+// Base tiles are OpenFreeMap's free, unlimited, no-API-key vector styles (© OpenStreetMap contributors;
+// attribution is wired into the map's attribution control, not just this comment). An earlier version of
+// this file used CARTO's raster basemaps, which turned out to now require an API key for anonymous use —
+// every tile silently came back as a small "API KEY REQUIRED" placeholder image instead of failing loudly,
+// so it went unnoticed until someone actually looked at the map. OpenFreeMap's vector styles are MapLibre's
+// own recommended free option and ship their own glyphs/sprite, so no extra setup is needed beyond the URL.
+// MapLibre's vendored JS (dashboard/vendor/) is the only *code* dependency with no network fetch — the
+// basemap tiles themselves are fetched live, exactly like the "free vector style ... for offline use"
+// fallback the original design doc (docs/dashboard-backend-design.md §5) already anticipated.
 import { cssVar } from "./format.js";
 
-const TILE_STYLES = {
-  light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-  dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-};
-const ATTRIBUTION = '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions" target="_blank">CARTO</a>';
-
-function rasterStyle(theme) {
-  return {
-    version: 8,
-    sources: {
-      base: {
-        type: "raster",
-        tiles: [0, 1, 2, 3].map((s) => TILE_STYLES[theme].replace("{s}", s)),
-        tileSize: 256,
-        attribution: ATTRIBUTION,
-      },
-    },
-    layers: [{ id: "base", type: "raster", source: "base" }],
-  };
-}
+const BASEMAP_STYLE = { light: "https://tiles.openfreemap.org/styles/positron",
+                        dark: "https://tiles.openfreemap.org/styles/dark" };
 
 const EMPTY_FC = { type: "FeatureCollection", features: [] };
 
@@ -76,10 +60,16 @@ function toPointFC(items, toProps) {
 }
 
 export class FleetMap {
-  constructor(container, { onSelectIssue, onSelectVehicle } = {}) {
+  constructor(container, { onSelectIssue, onSelectVehicle, theme = "light" } = {}) {
     this.onSelectIssue = onSelectIssue;
     this.onSelectVehicle = onSelectVehicle;
-    this.theme = null;
+    // Set from the real starting theme, not a null placeholder: setTheme()'s `if (theme === this.theme)
+    // return` guard only works if this already matches what `style` below actually loads. Getting this
+    // wrong meant *every* boot fired a second, redundant setStyle() moments after the first one — which
+    // raced against the very first view's data load: MapLibre drops a style's sources the instant
+    // setStyle() is called, before the new style has finished loading, so a `getSource(id)?.setData(fc)`
+    // landing in that gap silently did nothing (see _set()'s own defensive re-check for the residual risk).
+    this.theme = theme;
     this.hiddenByUser = new Set();      // layer ids the rail checkboxes turned off, kept across view switches
     this.view = "overview";
     this.busMarkers = new Map();        // vehicleId -> maplibregl.Marker
@@ -89,12 +79,16 @@ export class FleetMap {
     this._data = {};
     this.map = new maplibregl.Map({
       container,
-      style: rasterStyle("light"),
+      style: BASEMAP_STYLE[theme],
       center: [77.15, 28.55],           // Delhi NCR: where the demo fleet's real GPS traces are
       zoom: 10,
       attributionControl: false,
     });
-    this.map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+    // OpenFreeMap's style JSON doesn't declare its own source attribution, so it's supplied here —
+    // the underlying data is OpenStreetMap's either way, and its licence requires crediting it.
+    this.map.addControl(new maplibregl.AttributionControl({
+      compact: true, customAttribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
+    }), "bottom-right");
     this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     this.popup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: "260px" });
 
@@ -106,7 +100,7 @@ export class FleetMap {
   setTheme(theme) {
     if (theme === this.theme) return;
     this.theme = theme;
-    this.map.setStyle(rasterStyle(theme));
+    this.map.setStyle(BASEMAP_STYLE[theme]);
     this.map.once("style.load", () => this._build());
   }
 
@@ -259,10 +253,18 @@ export class FleetMap {
   }
 
   // ---- data setters. Each caches into this._data (so a theme change can rebuild without a re-fetch)
-  // and, if the map is mid-rebuild from a theme change, tolerates the source not existing yet. ----
+  // and, if the map is mid-rebuild from a theme change, tolerates the source not existing yet: _data is
+  // always updated first, so the next _build() picks up the real data even if setData() below can't
+  // run right now. The try/catch is a second line of defence — a MapLibre call that threw here (rather
+  // than just finding no source) used to abort every render call after it in that view's loader, which
+  // is a worse failure than the one line of missing data this guards against. ----
   _set(id, fc) {
     this._data[id] = fc;
-    this.map.getSource(id)?.setData(fc);
+    try {
+      this.map.getSource(id)?.setData(fc);
+    } catch (err) {
+      console.warn(`FleetMap: could not update source "${id}" yet (style mid-change); it will catch up on the next rebuild.`, err);
+    }
   }
   setPotholes(fc) { this._set("potholes", fc); }
   setZebra(fc) { this._set("zebra", fc); }

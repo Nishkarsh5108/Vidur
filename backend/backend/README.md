@@ -41,6 +41,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - Interactive API docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/api/v1/health
 - `--host 0.0.0.0` lets the friend's laptop reach this one. Use this laptop's LAN IP (from `ipconfig`) and allow port 8000 in Windows Firewall.
+- **Install from `requirements.txt`, not package by package.** `uvicorn[standard]` (note the extra) pulls in `websockets`, without which uvicorn has no WebSocket implementation at all — it silently 404s every WS upgrade instead of erroring, and the dashboard's live updates never connect, and the connection pill just reads "Disconnected." `pytest` won't catch this either: `TestClient` talks to the app in-process and never needs `websockets`. If `/ws/live` 404s on a real connection, `pip show websockets` and reinstall from `requirements.txt` if it's missing.
 - To use the "Simulate" button, `SIMULATE_PYTHON` (in `.env`, defaults to whatever Python is running this server) must point at a Python that has `edge/requirements.txt` installed — the same interpreter you use to run `python -m edge` by hand. Build the demo scenario once first: `python tools/sim/build_scenario.py` (see [tools/sim/README.md](../../tools/sim/README.md)).
 
 `.env`:

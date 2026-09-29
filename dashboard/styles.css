@@ -400,6 +400,7 @@ hr.rail-div { border: none; border-top: 1px solid var(--border); margin: var(--s
   width: 100%; padding: 6px 8px; border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong); background: var(--bg-sunken); color: var(--text); font: inherit; font-size: 12px;
 }
+.field-hint { font-size: 10.5px; color: var(--text-faint); margin-top: 5px; line-height: 1.4; }
 .field.row { display: flex; align-items: center; justify-content: space-between; }
 .field.row label { margin-bottom: 0; }
 .switch { position: relative; width: 34px; height: 19px; border-radius: 999px; background: var(--border-strong); transition: background 0.15s var(--ease); flex: none; }

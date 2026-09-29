@@ -57,16 +57,6 @@ function syncThemeButton() {
   fleetMap?.setTheme(eff);
 }
 
-function initThemeUi() {
-  initTheme();
-  syncThemeButton();
-  $("theme-btn").onclick = () => { cycleTheme(); syncThemeButton(); };
-  // Re-resolve 'auto' if the OS preference flips while the tab is open.
-  window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (currentTheme() === "auto") syncThemeButton();
-  });
-}
-
 // ---------------------------------------------------------------- toasts + ticker
 
 function toast(message, kind = "info") {
@@ -272,9 +262,33 @@ async function loadFleet() {
 
 const LOADERS = { overview: loadOverview, road: loadRoad, traffic: loadTraffic, infra: loadInfra, safety: loadSafety, fleet: loadFleet };
 
+// Guards against the same kind of pile-up as scheduleRefresh: without this, a slow load (backend busy
+// running the actual simulation) plus a burst of WS-triggered refreshes could have several overlapping
+// fetches for the same view in flight at once, each hammering the backend further and finishing in an
+// unpredictable order. `viewLoadWanted` still re-runs the loader once more after the in-flight one
+// settles, for *whatever view is current at that point* — so switching views mid-load isn't lost, and
+// once the burst passes the map/panel end up showing the latest, not a stale interleaved state.
+let viewLoadInFlight = false;
+let viewLoadWanted = false;
+
 function renderCurrentView() {
   renderLegend();
-  LOADERS[state.view]().catch((err) => toast(`Could not load ${state.view}: ${err.message}`, "critical"));
+  viewLoadWanted = true;
+  if (viewLoadInFlight) return;
+  runViewLoad();
+}
+
+async function runViewLoad() {
+  viewLoadInFlight = true;
+  while (viewLoadWanted) {
+    viewLoadWanted = false;
+    try {
+      await LOADERS[state.view]();
+    } catch (err) {
+      toast(`Could not load ${state.view}: ${err.message}`, "critical");
+    }
+  }
+  viewLoadInFlight = false;
 }
 
 function setView(view) {
@@ -297,9 +311,23 @@ async function refreshKpisAndRail() {
   } catch { /* connection pill already reflects backend/DB trouble */ }
 }
 
-function scheduleRefresh(delay = 500) {
-  clearTimeout(refreshDebounce);
-  refreshDebounce = setTimeout(() => { refreshKpisAndRail(); if (!state.detail) renderCurrentView(); }, delay);
+// Throttled, not debounced: during a fast multi-bus simulation, WS "event" messages can arrive many
+// times a second. A plain debounce (reset the timer on every call) would never actually fire until a
+// quiet gap — which, at "as fast as possible", might not come until the whole run finishes — so the
+// dashboard would look frozen the entire time. This instead guarantees a refresh at least every
+// `delay` ms: repeat calls within that window just mark one more refresh as "still wanted".
+let refreshWanted = false;
+
+function scheduleRefresh(delay = 1200) {
+  refreshWanted = true;
+  if (refreshDebounce) return;
+  refreshDebounce = setTimeout(() => {
+    refreshDebounce = null;
+    if (!refreshWanted) return;
+    refreshWanted = false;
+    refreshKpisAndRail();
+    if (!state.detail) renderCurrentView();
+  }, delay);
 }
 
 // ---------------------------------------------------------------- live updates
@@ -336,12 +364,20 @@ function setConnPill(kind) {
 // ---------------------------------------------------------------- boot
 
 async function boot() {
-  initThemeUi();
+  initTheme();
+  // Resolved once, up front, and handed straight to FleetMap: it loads that theme's style as its
+  // *first* style load, so there is no second, redundant setStyle() moments later racing the first
+  // view's data load (see the comment on FleetMap's constructor for what that race used to break).
+  const startTheme = effectiveTheme();
+  $("theme-btn").innerHTML = icon(startTheme === "dark" ? "moon" : "sun", 15);
   $("sim-gear").innerHTML = icon("gear", 15);
 
-  fleetMap = new FleetMap("map", { onSelectIssue: selectIssue, onSelectVehicle: selectVehicle });
+  fleetMap = new FleetMap("map", { onSelectIssue: selectIssue, onSelectVehicle: selectVehicle, theme: startTheme });
   await fleetMap.ready();
-  syncThemeButton();
+  $("theme-btn").onclick = () => { cycleTheme(); syncThemeButton(); };
+  window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (currentTheme() === "auto") syncThemeButton();
+  });
 
   simulate = new SimulateControl({
     button: $("sim-btn"), gearButton: $("sim-gear"), popover: $("sim-popover"), logBox: $("sim-log"),
